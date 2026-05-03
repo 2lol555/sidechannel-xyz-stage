@@ -1,43 +1,81 @@
-"""Trace heatmap rendering utilities."""
+"""TVLA heatmap rendering utilities."""
 
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
+from Configuration.measurement import MEASUREMENT_CONFIG
 from side_channel_types import ScanResults
 
 
-TraceMetricFn = Callable[["np.ndarray"], float]
+def _extract_plaintext(trace: "object") -> Optional[bytes]:
+    params = getattr(trace, "parameters", None)
+    if params is None:
+        return None
+
+    candidate = None
+    for key_name in ("PT", "PlainText", "PLAINTEXT"):
+        try:
+            candidate = params[key_name]
+            break
+        except Exception:
+            candidate = None
+
+    if candidate is None:
+        return None
+    raw_value = getattr(candidate, "value", candidate)
+    try:
+        return bytes(raw_value)
+    except Exception:
+        return None
 
 
-def absolute_strength_metric(samples: "np.ndarray") -> float:
-    """Absolute trace strength metric: mean(abs(samples))."""
-    import numpy as np
-
-    return float(np.mean(np.abs(samples)))
-
-
-def _load_first_trace_samples(trace_path: Path) -> Optional["np.ndarray"]:
+def compute_tvla_max_abs_t(trace_path: Path, fixed_plaintext: bytes) -> float:
+    """Compute max(abs(t)) for fixed-vs-random groups in one TRS file."""
     import numpy as np
     import trsfile
 
+    group_fixed: list[np.ndarray] = []
+    group_random: list[np.ndarray] = []
+
     with trsfile.open(str(trace_path), "r") as traceset:
-        if len(traceset) == 0:
-            return None
-        return np.asarray(traceset[0].samples, dtype=np.float32)
+        for trace in traceset:
+            plaintext = _extract_plaintext(trace)
+            if plaintext is None:
+                continue
+            samples = np.asarray(trace.samples, dtype=np.float64)
+            if samples.size == 0:
+                continue
+            if plaintext == fixed_plaintext:
+                group_fixed.append(samples)
+            else:
+                group_random.append(samples)
 
+    if len(group_fixed) < 2 or len(group_random) < 2:
+        raise ValueError(
+            f"Not enough TVLA traces in groups for {trace_path}: "
+            f"fixed={len(group_fixed)} random={len(group_random)}"
+        )
 
-def compute_trace_score(trace_path: Path, metric_fn: TraceMetricFn = absolute_strength_metric) -> float:
-    """Compute a scalar score from a trace using metric_fn."""
-    import numpy as np
+    fixed_arr = np.vstack(group_fixed)
+    random_arr = np.vstack(group_random)
 
-    samples = _load_first_trace_samples(trace_path)
-    if samples is None or samples.size == 0:
-        raise ValueError(f"Trace has no samples: {trace_path}")
+    fixed_mean = np.mean(fixed_arr, axis=0)
+    random_mean = np.mean(random_arr, axis=0)
+    fixed_var = np.var(fixed_arr, axis=0, ddof=1)
+    random_var = np.var(random_arr, axis=0, ddof=1)
 
-    score = float(metric_fn(samples))
-    if not np.isfinite(score):
-        raise ValueError(f"Metric returned non-finite value for: {trace_path}")
-    return score
+    denominator = np.sqrt((fixed_var / fixed_arr.shape[0]) + (random_var / random_arr.shape[0]))
+    t_values = np.zeros_like(fixed_mean, dtype=np.float64)
+    np.divide(
+        fixed_mean - random_mean,
+        denominator,
+        out=t_values,
+        where=denominator != 0,
+    )
+    max_abs_t = float(np.max(np.abs(t_values)))
+    if not np.isfinite(max_abs_t):
+        raise ValueError(f"Non-finite TVLA score for {trace_path}")
+    return max_abs_t
 
 
 def _build_axes(results: ScanResults) -> Tuple[List[float], List[float]]:
@@ -46,13 +84,12 @@ def _build_axes(results: ScanResults) -> Tuple[List[float], List[float]]:
     return x_values, y_values
 
 
-def build_heatmap_grid(
-    results: ScanResults,
-    metric_fn: TraceMetricFn = absolute_strength_metric,
-) -> Tuple["np.ndarray", List[float], List[float], int, dict]:
-    """Map per-point trace scores to a 2D grid (NaN where unavailable)."""
+def render_trace_metric_heatmap(results: ScanResults, threshold: float = 4.5) -> None:
+    """Render TVLA heatmap over scan points using max(abs(t))."""
     import numpy as np
+    import matplotlib.pyplot as plt
 
+    fixed_plaintext = MEASUREMENT_CONFIG.target.tvla_fixed_plaintext
     x_values, y_values = _build_axes(results)
     if not x_values or not y_values:
         raise ValueError("No scan points available for heatmap.")
@@ -60,9 +97,10 @@ def build_heatmap_grid(
     grid = np.full((len(y_values), len(x_values)), np.nan, dtype=np.float64)
     x_to_col = {x: i for i, x in enumerate(x_values)}
     y_to_row = {y: i for i, y in enumerate(y_values)}
+    point_to_index = {point: idx for idx, point in enumerate(results.keys())}
 
     scored_points = 0
-    point_to_index = {point: idx for idx, point in enumerate(results.keys())}
+    leaking_points = 0
     for (x, y), point_res in results.items():
         if not point_res.ok or not point_res.trace_path:
             continue
@@ -72,7 +110,7 @@ def build_heatmap_grid(
             continue
 
         try:
-            score = compute_trace_score(trace_path, metric_fn=metric_fn)
+            tvla_score = compute_tvla_max_abs_t(trace_path, fixed_plaintext=fixed_plaintext)
         except Exception:
             continue
 
@@ -81,38 +119,23 @@ def build_heatmap_grid(
         if row is None or col is None:
             continue
 
-        grid[row, col] = score
+        grid[row, col] = tvla_score
         scored_points += 1
-
-    return grid, x_values, y_values, scored_points, point_to_index
-
-
-def render_trace_metric_heatmap(
-    results: ScanResults,
-    metric_fn: TraceMetricFn = absolute_strength_metric,
-    metric_name: str = "absolute_strength",
-) -> None:
-    """Render a heatmap of metric scores for scanned points."""
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    grid, x_values, y_values, scored_points, point_to_index = build_heatmap_grid(results, metric_fn=metric_fn)
+        if tvla_score > threshold:
+            leaking_points += 1
 
     finite_values = grid[np.isfinite(grid)]
     if finite_values.size == 0:
-        raise ValueError("No valid trace scores available for heatmap.")
+        raise ValueError("No valid TVLA scores available for heatmap.")
 
     fig_w = min(16.0, max(8.0, len(x_values) * 0.5))
     fig_h = min(12.0, max(6.0, len(y_values) * 0.5))
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    cmap = plt.get_cmap("coolwarm").copy()
+    cmap = plt.get_cmap("viridis").copy()
     cmap.set_bad(color="#d9d9d9")
     image = ax.imshow(grid, origin="upper", aspect="auto", cmap=cmap)
 
-    # Overlay scan-point indices to match evaluation-phase "goto N" numbering.
-    x_to_col = {x: i for i, x in enumerate(x_values)}
-    y_to_row = {y: i for i, y in enumerate(y_values)}
     for point, idx in point_to_index.items():
         x, y = point
         col = x_to_col.get(x)
@@ -145,12 +168,13 @@ def render_trace_metric_heatmap(
     min_score = float(np.min(finite_values))
     max_score = float(np.max(finite_values))
     ax.set_title(
-        f"Trace Heatmap ({metric_name}) | scored={scored_points}/{len(results)} "
-        f"| min={min_score:.4f}, max={max_score:.4f}"
+        f"TVLA Heatmap (max|t|) | scored={scored_points}/{len(results)} "
+        f"| leaking>{threshold:.1f}: {leaking_points} "
+        f"| min={min_score:.3f}, max={max_score:.3f}"
     )
 
     colorbar = fig.colorbar(image, ax=ax)
-    colorbar.set_label(f"{metric_name} score")
+    colorbar.set_label("max(|t|)")
 
     fig.tight_layout()
     plt.show(block=False)

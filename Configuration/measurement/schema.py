@@ -51,6 +51,7 @@ class PicoConfig:
 class TargetConfig:
     key_length_bytes: int = 16
     fixed_nonce: bytes = field(default_factory=lambda: bytes(16))
+    tvla_fixed_plaintext: bytes = field(default_factory=lambda: bytes.fromhex("DA39A3EE5E6B4B0D3255BFEF95601890"))
     ciphertext_timeout_ms: int = 250
     capture_start_delay_s: float = 0.05
 

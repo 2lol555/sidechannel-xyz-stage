@@ -147,8 +147,11 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
         self.ciphertext_timeout_ms: int = target_cfg.ciphertext_timeout_ms
         self.capture_start_delay_s: float = target_cfg.capture_start_delay_s
         self._nonce_zero: bytes = target_cfg.fixed_nonce
+        self._tvla_fixed_plaintext: bytes = target_cfg.tvla_fixed_plaintext
         if len(self._nonce_zero) != 16:
             raise ValueError("target.fixed_nonce must be exactly 16 bytes.")
+        if len(self._tvla_fixed_plaintext) != 16:
+            raise ValueError("target.tvla_fixed_plaintext must be exactly 16 bytes.")
         if self.key_length_bytes != 16:
             raise ValueError("Only 16-byte AES keys are supported.")
 
@@ -159,6 +162,10 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
             self.cw.connect()
 
         super().__init__(measurement_config.output.to_trace_creator_config())
+        if self.output_trace_count < 4:
+            raise ValueError("TVLA mode requires at least 4 traces per point (2 per group).")
+        if self.output_trace_count % 2 != 0:
+            raise ValueError("TVLA mode requires an even trace count per point.")
 
         # AES key used for all traces (matches prior scripts); can be changed to per-trace if desired.
         self.key: bytes = token_bytes(self.key_length_bytes)
@@ -376,13 +383,11 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
         self._encrypt_and_capture(dummy_plaintext, -1, save=False)
 
         for index in range(self.output_trace_count):
-            if self.enable_chipwhisperer:
-                key, plaintext = self.cw.next_key_pt()
+            # TVLA acquisition: same key, fixed-vs-random plaintext groups.
+            if index % 2 == 0:
+                plaintext = self._tvla_fixed_plaintext
             else:
-                key, plaintext = token_bytes(self.key_length_bytes), token_bytes(self.key_length_bytes)
-            self.key = key
-            if self.enable_chipwhisperer:
-                self.cw.set_key(self.key)
+                plaintext = token_bytes(self.key_length_bytes)
             if index % 10 == 0 or index == self.output_trace_count - 1:
                 print(f'Capturing trace {index + 1}/{self.output_trace_count}...')
             self._encrypt_and_capture(plaintext, index, save=save_traces)

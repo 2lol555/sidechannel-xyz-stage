@@ -65,7 +65,7 @@ def run_evaluation_phase(results: ScanResults) -> None:
                 "  move X Y        - Move to absolute coordinates [e.g. 'move 3.5 7.2']\n"
                 "  plot            - Visualize trace for current selected scanned point\n"
                 "  plot N          - Visualize trace for scanned point index N\n"
-                "  heatmap         - Visualize absolute-strength heatmap over scanned points\n"
+                "  heatmap         - Visualize TVLA max|t| heatmap over scanned points\n"
                 "  exit, quit      - Disable steppers and exit evaluation phase\n"
             )
         elif user_input == "list":
@@ -111,7 +111,7 @@ def run_evaluation_phase(results: ScanResults) -> None:
         elif user_input == "heatmap":
             try:
                 render_trace_metric_heatmap(results)
-                print("Launched heatmap using absolute-strength trace metric.")
+                print("Launched heatmap using TVLA max|t| metric.")
             except Exception as exc:
                 print(f"Failed to render heatmap: {type(exc).__name__}: {exc}")
         else:
