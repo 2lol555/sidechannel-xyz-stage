@@ -6,8 +6,9 @@ from Configuration.measurement.schema import PicoConfig
 PICO_OFFSET_MV: float = 0.0
 PICO_TIMEBASE: int = 2
 PICO_CHANNEL_A_RANGE: int = 8
-PICO_CHANNEL_B_RANGE: int = 2
-PICO_PRE_TRIGGER_SAMPLES: int = 10000
+PICO_CHANNEL_B_RANGE: int = 1
+# 10% pre-trigger for current 250000-sample saved window.
+PICO_PRE_TRIGGER_SAMPLES: int = 25_000
 PICO_TRIGGER_CHANNEL: int = 0
 PICO_TRIGGER_THRESHOLD_ADC: int = int(3 / 10 * PICO_MAGIC_VALUE)
 PICO_TRIGGER_DIRECTION: int = 2

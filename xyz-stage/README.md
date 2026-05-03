@@ -107,6 +107,33 @@ Output layout summary:
 Operator note:
 - Direct OctoPrint G-code send support exists via `send_gcode_command(...)` in `xyz-stage/octoprint_communication.py` (advanced/manual usage).
 
+## Dedicated CPA Capture At Current Position (No Movement)
+
+If you already moved to the desired XY point (for example via evaluation `goto N`),
+capture a dedicated random-plaintext set with fixed key and no motion:
+
+```bash
+python xyz-stage/capture_cpa_current_position.py --point-index 768 --trace-count 5000
+```
+
+Optional fixed key:
+
+```bash
+python xyz-stage/capture_cpa_current_position.py --point-index 768 --trace-count 5000 --key-hex 00112233445566778899AABBCCDDEEFF
+```
+
+Inspect trace shape first and select a 1-2 AES-round window:
+
+```bash
+python sca-helpers/plot.py /path/to/768_cpa.trs -n 5
+```
+
+Then run aggregate CPA rank-curve analysis on the selected window:
+
+```bash
+python sca-helpers/cpa_rank_curve.py --trs /path/to/768_cpa.trs --sample-from <START> --sample-to <END> --step 100
+```
+
 ## Dry-run toggles
 
 You can disable hardware subsystems independently:

@@ -143,6 +143,7 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
         self.ready_timeout_ms: int = runtime_cfg.ready_timeout_ms
         self.enable_picoscope: bool = runtime_cfg.enable_picoscope
         self.enable_chipwhisperer: bool = runtime_cfg.enable_chipwhisperer
+        self._fixed_range_scale_mv: float = 1.0
         self.key_length_bytes: int = target_cfg.key_length_bytes
         self.ciphertext_timeout_ms: int = target_cfg.ciphertext_timeout_ms
         self.capture_start_delay_s: float = target_cfg.capture_start_delay_s
@@ -153,22 +154,45 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
             raise ValueError("Only 16-byte AES keys are supported.")
 
         self.pico_handle = self._setup_picoscope() if self.enable_picoscope else None
+        if self.enable_picoscope:
+            self._fixed_range_scale_mv = self._compute_fixed_range_scale_mv()
+
         self.cw = None
         if self.enable_chipwhisperer:
             self.cw = CWNanoAes()
             self.cw.connect()
 
         super().__init__(measurement_config.output.to_trace_creator_config())
+        if self.output_trace_count < 1:
+            raise ValueError("Trace count must be >= 1.")
 
         # AES key used for all traces (matches prior scripts); can be changed to per-trace if desired.
         self.key: bytes = token_bytes(self.key_length_bytes)
         print(f"Using AES Key: 0x{self.key.hex().upper()}")
+        print(f"Trace normalization: fixed_range_peak (mV at int8 full-scale={self._fixed_range_scale_mv:.3f})")
         if self.enable_chipwhisperer:
             self.cw.set_key(self.key)
 
         print(f'Trace output will be saved to: "{self.output_path}"')
         if self.data_output_path:
             print(f'Trace parameter data will be saved to: "{self.data_output_path}"')
+
+    def _compute_fixed_range_scale_mv(self) -> float:
+        max_adc = ctypes.c_int16(PICO_MAGIC_VALUE)
+        probe_adc = (ctypes.c_int16 * 1)(PICO_MAGIC_VALUE)
+        probe_mv = adc2mV(probe_adc, self.channel_b_range, max_adc)
+        probe_arr = np.asarray(probe_mv, dtype=np.float64)
+        scale = float(np.max(np.abs(probe_arr)))
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError(
+                f"Failed to derive fixed-range scale for channel range {self.channel_b_range}: {scale}"
+            )
+        return scale
+
+    def _scale_trace_to_int8(self, adc_mv_trace: np.ndarray) -> np.ndarray:
+        adc_mv_trace = np.asarray(adc_mv_trace, dtype=np.float64)
+        scaled = adc_mv_trace / (self._fixed_range_scale_mv / 127.0)
+        return np.clip(scaled, -128, 127).astype(np.int8)
 
     def prepare_output(self, filename: str | None = None) -> None:
         """Reinitialize output buffers/file handles for a new run on the same device session."""
@@ -326,9 +350,7 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
 
         max_adc = ctypes.c_int16(PICO_MAGIC_VALUE)
         adc_mv_ch_b_max = adc2mV(buffer_b_max, self.channel_b_range, max_adc)
-        max_value = np.max(np.abs(adc_mv_ch_b_max))
-        captured_trace = np.clip((adc_mv_ch_b_max / (max_value / 127.0)), -128, 127
-                                 ).astype(np.int8)[self.output_sample_from:self.output_sample_to]
+        captured_trace = self._scale_trace_to_int8(adc_mv_ch_b_max)[self.output_sample_from:self.output_sample_to]
 
         if not save_trace:
             return
@@ -376,13 +398,7 @@ class MeasureScriptPicoscopeJC(GenericTraceCreator):
         self._encrypt_and_capture(dummy_plaintext, -1, save=False)
 
         for index in range(self.output_trace_count):
-            if self.enable_chipwhisperer:
-                key, plaintext = self.cw.next_key_pt()
-            else:
-                key, plaintext = token_bytes(self.key_length_bytes), token_bytes(self.key_length_bytes)
-            self.key = key
-            if self.enable_chipwhisperer:
-                self.cw.set_key(self.key)
+            plaintext = token_bytes(self.key_length_bytes)
             if index % 10 == 0 or index == self.output_trace_count - 1:
                 print(f'Capturing trace {index + 1}/{self.output_trace_count}...')
             self._encrypt_and_capture(plaintext, index, save=save_traces)

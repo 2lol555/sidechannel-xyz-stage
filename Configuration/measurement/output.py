@@ -5,9 +5,9 @@ from Configuration.measurement.schema import OutputConfig
 from Helpers.ParameterWrapper import ParameterWrapper
 
 
-OUTPUT_TRACE_COUNT: int = 10
+OUTPUT_TRACE_COUNT: int = 200
 OUTPUT_SAMPLE_START: int = 0
-OUTPUT_SAMPLE_END: int = 400_000
+OUTPUT_SAMPLE_END: int = 250_000
 OUTPUT_FOLDER_PATH: str = "/home/xpolakov/data/"
 OUTPUT_FILE_NAME: str = "xyz-capture"
 OUTPUT_FILE_TYPE: FileType = FileType.TRS

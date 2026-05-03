@@ -106,7 +106,7 @@ class OctoPrintCommunicator:
             total_time_sec += time_xy_sec
 
         total_time_sec += 0.5
-        total_time_sec *= 1.5
+        total_time_sec *= 1.33
         if total_time_sec > 0:
             steps = int(total_time_sec / 0.1) + 1
             with tqdm(total=steps, desc="Moving head", unit="0.1s", leave=False) as pbar:

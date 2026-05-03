@@ -1,8 +1,8 @@
 from configuration.schema import ScanSettings
 
 
-SCAN_CHIP_SIZE = (9.0, 9.0)
-SCAN_STEP_SIZE = (0.25, 0.25)
+SCAN_CHIP_SIZE = (5.0, 7.0)
+SCAN_STEP_SIZE = (1.0, 1.0)
 SCAN_OUTPUT_ROOT = "/home/xpolakov/data/"
 
 
